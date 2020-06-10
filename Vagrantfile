@@ -35,6 +35,16 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
     Homestead.configure(config, settings)
 
+    config.vm.provision "shell", path: "scripts-custom/maria-db.sh"
+    config.vm.provision "shell", path: "scripts-custom/nginx.sh"
+    config.vm.provision "shell", path: "scripts-custom/postfix.sh"
+    config.vm.provision "shell", path: "scripts-custom/dovecot.sh"
+    config.vm.provision "shell", path: "scripts-custom/php.sh"
+    config.vm.provision "shell", path: "scripts-custom/utilities.sh"
+    config.vm.provision "shell", path: "scripts-custom/yarn.sh"
+    config.vm.provision "shell", path: "scripts-custom/audio-tools.sh"
+    config.vm.provision "shell", path: "scripts-custom/provisioning-complete.sh", privileged: false, keep_color: true
+
     if File.exist? afterScriptPath then
         config.vm.provision "shell", path: afterScriptPath, privileged: false, keep_color: true
     end
