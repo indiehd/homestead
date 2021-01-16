@@ -19,7 +19,7 @@ class Homestead
     config.vm.define settings['name'] ||= 'homestead'
     config.vm.box = settings['box'] ||= 'laravel/homestead'
     unless settings.has_key?('SpeakFriendAndEnter')
-      config.vm.box_version = settings['version'] ||= '>= 9.5.0'
+      config.vm.box_version = settings['version'] ||= '~> 10'
     end
     config.vm.hostname = settings['hostname'] ||= 'homestead'
 
@@ -74,6 +74,15 @@ class Homestead
       h.cpus = settings['cpus'] ||= 1
       h.memory = settings['memory'] ||= 2048
       h.linked_clone = true
+      if settings.has_key?('hyperv_mac') && settings['hyperv_mac']
+        h.mac = settings['hyperv_mac']
+      end
+      if settings.has_key?('hyperv_maxmemory') && settings['hyperv_maxmemory']
+        h.maxmemory = settings['hyperv_maxmemory']
+      end
+      if settings.has_key?('hyperv_enable_virtualization_extensions') && settings['hyperv_enable_virtualization_extensions']
+        h.enable_virtualization_extensions = true
+      end
 
       if Vagrant.has_plugin?('vagrant-hostmanager')
         override.hostmanager.ignore_private_ip = true
@@ -217,6 +226,21 @@ class Homestead
     config.vm.provision "shell", inline: "mkdir -p /home/vagrant/.homestead-features"
     config.vm.provision "shell", inline: "chown -Rf vagrant:vagrant /home/vagrant/.homestead-features"
 
+    # Enable Services
+    if settings.has_key?('services')
+      settings['services'].each do |service|
+        service['enabled'].each do |enable_service|
+          config.vm.provision "shell", inline: "sudo systemctl enable #{enable_service}"
+          config.vm.provision "shell", inline: "sudo systemctl start #{enable_service}"
+        end if service.include?('enabled')
+
+        service['disabled'].each do |disable_service|
+          config.vm.provision "shell", inline: "sudo systemctl disable #{disable_service}"
+          config.vm.provision "shell", inline: "sudo systemctl stop #{disable_service}"
+        end if service.include?('disabled')
+      end
+    end
+
     # Install opt-in features
     if settings.has_key?('features')
       settings['features'].each do |feature|
@@ -276,9 +300,9 @@ class Homestead
 
         if site['wildcard'] == 'yes'
           config.vm.provision 'shell' do |s|
-            s.name = 'Creating Wildcard Certificate: *.' + site['map'].partition('.').last
+            s.name = 'Creating Wildcard Certificate: *.' + site['map']
             s.path = script_dir + '/create-certificate.sh'
-            s.args = ['*.' + site['map'].partition('.').last]
+            s.args = ['*.' + site['map']]
           end
         end
 
@@ -344,26 +368,29 @@ class Homestead
               rewrites ||= ''             # $10
           ]
 
-          if site['use_wildcard'] == 'yes'
-            if site['type'] != 'apache'
-              config.vm.provision 'shell' do |s|
-                s.inline = "sed -i \"s/$1.crt/*.$2.crt/\" /etc/nginx/sites-available/$1"
-                s.args = [site['map'], site['map'].partition('.').last]
-              end
+          # Should we use the wildcard ssl?
+          if site['wildcard'] == 'yes' or site['use_wildcard'] == 'yes'
+            if site['use_wildcard'] != 'no'
+              if site['type'] != 'apache'
+                config.vm.provision 'shell' do |s|
+                  s.inline = "sed -i \"s/$1.crt/*.$1.crt/\" /etc/nginx/sites-available/$1"
+                  s.args = [site['map']]
+                end
 
-              config.vm.provision 'shell' do |s|
-                s.inline = "sed -i \"s/$1.key/*.$2.key/\" /etc/nginx/sites-available/$1"
-                s.args = [site['map'], site['map'].partition('.').last]
-              end
-            else
-              config.vm.provision 'shell' do |s|
-                s.inline = "sed -i \"s/$1.crt/*.$2.crt/\" /etc/apache2/sites-available/$1-ssl.conf"
-                s.args = [site['map'], site['map'].partition('.').last]
-              end
+                config.vm.provision 'shell' do |s|
+                  s.inline = "sed -i \"s/$1.key/*.$1.key/\" /etc/nginx/sites-available/$1"
+                  s.args = [site['map']]
+                end
+              else
+                config.vm.provision 'shell' do |s|
+                  s.inline = "sed -i \"s/$1.crt/*.$1.crt/\" /etc/apache2/sites-available/$1-ssl.conf"
+                  s.args = [site['map']]
+                end
 
-              config.vm.provision 'shell' do |s|
-                s.inline = "sed -i \"s/$1.key/*.$2.key/\" /etc/apache2/sites-available/$1-ssl.conf"
-                s.args = [site['map'], site['map'].partition('.').last]
+                config.vm.provision 'shell' do |s|
+                  s.inline = "sed -i \"s/$1.key/*.$1.key/\" /etc/apache2/sites-available/$1-ssl.conf"
+                  s.args = [site['map']]
+                end
               end
             end
           end
@@ -474,7 +501,7 @@ class Homestead
       end
 
       config.vm.provision 'shell' do |s|
-        s.inline = 'service php5.6-fpm restart;service php7.0-fpm restart;service  php7.1-fpm restart; service php7.2-fpm restart; service php7.3-fpm restart; service php7.4-fpm restart;'
+        s.inline = 'service php5.6-fpm restart;service php7.0-fpm restart;service  php7.1-fpm restart; service php7.2-fpm restart; service php7.3-fpm restart; service php7.4-fpm restart; service php8.0-fpm restart;'
       end
     end
 
@@ -490,8 +517,8 @@ class Homestead
 
     # Configure All Of The Configured Databases
     if settings.has_key?('databases')
-      # Check which databases are enabled
       enabled_databases = Array.new
+      # Check which databases are enabled
       if settings.has_key?('features')
         settings['features'].each do |feature|
           feature_name = feature.keys[0]
@@ -507,16 +534,20 @@ class Homestead
       end
 
       settings['databases'].each do |db|
-        config.vm.provision 'shell' do |s|
-          s.name = 'Creating MySQL Database: ' + db
-          s.path = script_dir + '/create-mysql.sh'
-          s.args = [db]
+        if (enabled_databases.include? 'mysql') || (enabled_databases.include? 'mysql8') || (enabled_databases.include? 'mariadb')
+          config.vm.provision 'shell' do |s|
+            s.name = 'Creating MySQL / MariaDB Database: ' + db
+            s.path = script_dir + '/create-mysql.sh'
+            s.args = [db]
+          end
         end
 
-        config.vm.provision 'shell' do |s|
-          s.name = 'Creating Postgres Database: ' + db
-          s.path = script_dir + '/create-postgres.sh'
-          s.args = [db]
+        if enabled_databases.include? 'postgresql'
+          config.vm.provision 'shell' do |s|
+            s.name = 'Creating Postgres Database: ' + db
+            s.path = script_dir + '/create-postgres.sh'
+            s.args = [db]
+          end
         end
 
         if enabled_databases.include? 'mongodb'
@@ -577,10 +608,35 @@ class Homestead
     end
 
     if settings.has_key?('backup') && settings['backup'] && (Vagrant::VERSION >= '2.1.0' || Vagrant.has_plugin?('vagrant-triggers'))
-      dir_prefix = '/vagrant/'
+      dir_prefix = '/vagrant/.backup'
+
+      # Rebuild the enabled_databases so we can check before backing up
+      enabled_databases = Array.new
+      # Check which databases are enabled
+      if settings.has_key?('features')
+        settings['features'].each do |feature|
+          feature_name = feature.keys[0]
+          feature_arguments = feature[feature_name]
+
+          # If feature is set to false, ignore
+          if feature_arguments == false
+            next
+          end
+
+          enabled_databases.push feature_name
+        end
+      end
+
+      # Loop over each DB
       settings['databases'].each do |database|
-        Homestead.backup_mysql(database, "#{dir_prefix}/mysql_backup", config)
-        Homestead.backup_postgres(database, "#{dir_prefix}/postgres_backup", config)
+        # Backup MySQL/MariaDB
+        if (enabled_databases.include? 'mysql') || (enabled_databases.include? 'mariadb')
+          Homestead.backup_mysql(database, "#{dir_prefix}/mysql_backup", config)
+        end
+        # Backup PostgreSQL
+        if enabled_databases.include? 'postgresql'
+          Homestead.backup_postgres(database, "#{dir_prefix}/postgres_backup", config)
+        end
       end
     end
 
@@ -599,7 +655,7 @@ class Homestead
     now = Time.now.strftime("%Y%m%d%H%M")
     config.trigger.before :destroy do |trigger|
       trigger.warn = "Backing up mysql database #{database}..."
-      trigger.run_remote = { inline: "mkdir -p #{dir}/#{now} && mysqldump --routines #{database} > #{dir}/#{now}/#{database}-#{now}.sql" }
+      trigger.run_remote = {inline: "mkdir -p #{dir}/#{now} && mysqldump --routines #{database} > #{dir}/#{now}/#{database}-#{now}.sql"}
     end
   end
 
@@ -607,7 +663,7 @@ class Homestead
     now = Time.now.strftime("%Y%m%d%H%M")
     config.trigger.before :destroy do |trigger|
       trigger.warn = "Backing up postgres database #{database}..."
-      trigger.run_remote = { inline: "mkdir -p #{dir}/#{now} && echo localhost:5432:#{database}:homestead:secret > ~/.pgpass && chmod 600 ~/.pgpass && pg_dump -U homestead -h localhost #{database} > #{dir}/#{now}/#{database}-#{now}.sql" }
+      trigger.run_remote = {inline: "mkdir -p #{dir}/#{now} && echo localhost:5432:#{database}:homestead:secret > ~/.pgpass && chmod 600 ~/.pgpass && pg_dump -U homestead -h localhost #{database} > #{dir}/#{now}/#{database}-#{now}.sql"}
     end
   end
 end
