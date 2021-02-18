@@ -17,7 +17,6 @@ read_buffer_size = 2M
 read_rnd_buffer_size = 8M
 myisam_sort_buffer_size = 64M
 thread_cache_size = 8
-query_cache_size = 32M
 
 # Uncomment the following if you are using InnoDB tables
 innodb_data_home_dir = /var/lib/mysql
